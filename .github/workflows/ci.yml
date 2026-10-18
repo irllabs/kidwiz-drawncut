@@ -1,0 +1,56 @@
+# Draw'n'Cut CI: build the app and run its unit tests on an iOS simulator.
+# Minimal on purpose (macOS minutes): no UI tests, no archive. The SAM 2.1
+# models are downloaded by scripts/download-models.sh and cached by the
+# script's own revision, so a run fetches them only when that changes.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and unit tests
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache the SAM models
+        uses: actions/cache@v4
+        with:
+          path: Models/*.mlpackage
+          key: sam-models-${{ hashFiles('scripts/download-models.sh') }}
+
+      - name: Download the SAM models
+        run: |
+          if ! ls Models/*.mlpackage >/dev/null 2>&1; then scripts/download-models.sh; fi
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Unit tests
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')))")
+          xcodebuild test \
+            -project DrawNCut.xcodeproj \
+            -scheme DrawNCut \
+            -only-testing:DrawNCutTests \
+            -destination "id=$device" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -n 60
+          exit ${PIPESTATUS[0]}
